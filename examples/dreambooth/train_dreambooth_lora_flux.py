@@ -176,10 +176,12 @@ Please adhere to the licensing terms as described [here](https://huggingface.co/
 
 def load_text_encoders(class_one, class_two):
     text_encoder_one = class_one.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant
+        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant,
+        cache_dir=args.cache_dir, low_cpu_mem_usage=True,
     )
     text_encoder_two = class_two.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="text_encoder_2", revision=args.revision, variant=args.variant
+        args.pretrained_model_name_or_path, subfolder="text_encoder_2", revision=args.revision, variant=args.variant,
+        cache_dir=args.cache_dir, low_cpu_mem_usage=True,
     )
     return text_encoder_one, text_encoder_two
 
@@ -241,7 +243,8 @@ def import_model_class_from_model_name_or_path(
     pretrained_model_name_or_path: str, revision: str, subfolder: str = "text_encoder"
 ):
     text_encoder_config = PretrainedConfig.from_pretrained(
-        pretrained_model_name_or_path, subfolder=subfolder, revision=revision
+        pretrained_model_name_or_path, subfolder=subfolder, revision=revision, 
+        cache_dir=args.cache_dir, low_cpu_mem_usage=True,
     )
     model_class = text_encoder_config.architectures[0]
     if model_class == "CLIPTextModel":
@@ -1141,6 +1144,7 @@ def main(args):
                 torch_dtype=torch_dtype,
                 revision=args.revision,
                 variant=args.variant,
+                cache_dir=args.cache_dir, low_cpu_mem_usage=True,
             )
             pipeline.set_progress_bar_config(disable=True)
 
@@ -1178,16 +1182,27 @@ def main(args):
                 exist_ok=True,
             ).repo_id
 
+    # For mixed precision training we cast all non-trainable weights (vae, text_encoder and transformer) to half-precision
+    # as these weights are only used for inference, keeping weights in full precision is not required.
+    weight_dtype = torch.float32
+    if accelerator.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif accelerator.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
+
     # Load the tokenizers
+    print(f"Loading tokenizers from {args.pretrained_model_name_or_path}")
     tokenizer_one = CLIPTokenizer.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="tokenizer",
         revision=args.revision,
+        cache_dir=args.cache_dir, low_cpu_mem_usage=True,
     )
     tokenizer_two = T5TokenizerFast.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="tokenizer_2",
         revision=args.revision,
+        cache_dir=args.cache_dir, low_cpu_mem_usage=True,
     )
 
     # import correct text encoder classes
@@ -1198,21 +1213,33 @@ def main(args):
         args.pretrained_model_name_or_path, args.revision, subfolder="text_encoder_2"
     )
 
+    print(f"Loading noise scheduler from {args.pretrained_model_name_or_path}")
     # Load scheduler and models
     noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="scheduler"
+        args.pretrained_model_name_or_path, subfolder="scheduler",
+        cache_dir=args.cache_dir, low_cpu_mem_usage=True,
     )
     noise_scheduler_copy = copy.deepcopy(noise_scheduler)
     text_encoder_one, text_encoder_two = load_text_encoders(text_encoder_cls_one, text_encoder_cls_two)
+    print(f"Loading vae from {args.pretrained_model_name_or_path}")
     vae = AutoencoderKL.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="vae",
         revision=args.revision,
         variant=args.variant,
+        cache_dir=args.cache_dir, low_cpu_mem_usage=True,
     )
-    transformer = FluxTransformer2DModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant
-    )
+    print(f"Loading transformer from {args.pretrained_model_name_or_path}")
+    for rank in range(accelerator.num_processes):
+        if accelerator.process_index == rank:
+            transformer = FluxTransformer2DModel.from_pretrained(
+                args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant,
+                cache_dir=args.cache_dir, low_cpu_mem_usage=True,
+            )
+            transformer.to(accelerator.device, dtype=weight_dtype)
+            print(f"Loaded transformer for rank {rank}")
+        accelerator.wait_for_everyone()
+    print(f"LoadED transformer from {args.pretrained_model_name_or_path}")
 
     # We only train the additional adapter LoRA layers
     transformer.requires_grad_(False)
@@ -1227,24 +1254,19 @@ def main(args):
         else:
             raise ValueError("npu flash attention requires torch_npu extensions and is supported only on npu device ")
 
-    # For mixed precision training we cast all non-trainable weights (vae, text_encoder and transformer) to half-precision
-    # as these weights are only used for inference, keeping weights in full precision is not required.
-    weight_dtype = torch.float32
-    if accelerator.mixed_precision == "fp16":
-        weight_dtype = torch.float16
-    elif accelerator.mixed_precision == "bf16":
-        weight_dtype = torch.bfloat16
-
     if torch.backends.mps.is_available() and weight_dtype == torch.bfloat16:
         # due to pytorch#99272, MPS does not yet support bfloat16.
         raise ValueError(
             "Mixed precision training with bfloat16 is not supported on MPS. Please use fp16 (recommended) or fp32 instead."
         )
 
+    print(f"Moving models to {accelerator.device} with dtype {weight_dtype}")
+    # TODO: sequential model loading
     vae.to(accelerator.device, dtype=weight_dtype)
-    transformer.to(accelerator.device, dtype=weight_dtype)
+    # transformer.to(accelerator.device, dtype=weight_dtype)
     text_encoder_one.to(accelerator.device, dtype=weight_dtype)
     text_encoder_two.to(accelerator.device, dtype=weight_dtype)
+    print(f"Models moved to {accelerator.device} with dtype {weight_dtype}")
 
     if args.gradient_checkpointing:
         transformer.enable_gradient_checkpointing()
@@ -1910,6 +1932,7 @@ def main(args):
                     revision=args.revision,
                     variant=args.variant,
                     torch_dtype=weight_dtype,
+                    cache_dir=args.cache_dir, low_cpu_mem_usage=True,
                 )
                 pipeline_args = {"prompt": args.validation_prompt}
                 images = log_validation(
@@ -1960,6 +1983,7 @@ def main(args):
             revision=args.revision,
             variant=args.variant,
             torch_dtype=weight_dtype,
+            cache_dir=args.cache_dir, low_cpu_mem_usage=True,
         )
         # load attention processors
         pipeline.load_lora_weights(args.output_dir)

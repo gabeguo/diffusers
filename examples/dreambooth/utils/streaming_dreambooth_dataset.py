@@ -7,15 +7,16 @@ class StreamingDreamBoothDataset(Dataset):
     def __init__(
         self,
         dataset_urls,  # List of URLs for webdataset tar files
-        instance_prompt,
-        class_prompt,
+        instance_prompt=None,
+        class_prompt=None,
         class_data_root=None,
         class_num=None,
         size=1024,
         repeats=1,
         center_crop=False,
         cache_dir=None,
-        dataset_length=None,  # Approximate length for __len__,
+        dataset_length=2200000,
+        cache_size=128,
         rank=0,
         world_size=1,
     ):
@@ -32,14 +33,10 @@ class StreamingDreamBoothDataset(Dataset):
         self.repeats = repeats
         self.instance_prompt = instance_prompt
         self.class_prompt = class_prompt
-        self.dataset_length = dataset_length or 100000  # Default approximate length
+        self.dataset_length = dataset_length
 
         self.rank = rank
-        self.world_size = world_size
-
-        if self.world_size > 1:
-            # every GPU sees different data (not exactly even tho)
-            dataset_urls = dataset_urls[self.rank::self.world_size]
+        self.world_size = world_size 
 
         # Load streaming dataset
         self.streaming_dataset = load_dataset(
@@ -53,12 +50,15 @@ class StreamingDreamBoothDataset(Dataset):
         # Create an iterator that we can cycle through
         self._dataset_iterator = iter(self.streaming_dataset)
         self._current_items = []  # Cache for current batch of items
-        self._cache_size = 1000  # Number of items to cache
+        self._cache_size = cache_size  # Number of items to cache
         self._current_cache_index = 0  # Track position within current cache
+        
+        self._dataset_iterator.skip(self.rank) # stagger the starting point of each GPU, so they don't overlap
         
         # Pre-load initial batch
         self._refill_cache()
 
+        assert instance_prompt is None, "Instance prompt not needed"
         assert class_prompt is None, "Class prompt is not supported for streaming dataset"
         assert class_data_root is None, "Class data root is not supported for streaming dataset"
         assert class_num is None, "Class number is not supported for streaming dataset"
@@ -75,31 +75,24 @@ class StreamingDreamBoothDataset(Dataset):
     def _refill_cache(self):
         """Refill the cache with new items from the streaming dataset."""
         # Clear the old cache to free memory
-        self._current_items.clear()
+        self._current_items = list()
+        # Reset cache index
         self._current_cache_index = 0
         
-        new_items = []
-        try:
+        def fill_cache():
             for _ in range(self._cache_size):
-                item = next(self._dataset_iterator)
+                for _ in range(self.world_size):
+                    item = next(self._dataset_iterator) # each GPU sees different data
                 # Repeat each item according to repeats parameter
                 for _ in range(self.repeats):
-                    new_items.append(item)
+                    self._current_items.append(item)
+        try:
+            fill_cache()
         except StopIteration:
             # If we reach the end, restart the iterator
             self._dataset_iterator = iter(self.streaming_dataset)
-            # Try to get at least some items
-            try:
-                for _ in range(min(self._cache_size, 100)):
-                    item = next(self._dataset_iterator)
-                    for _ in range(self.repeats):
-                        new_items.append(item)
-            except StopIteration:
-                # If still no items, something is wrong
-                if not new_items:
-                    raise RuntimeError("Unable to load any items from the streaming dataset")
-        
-        self._current_items = new_items  # Replace instead of extend
+            self._dataset_iterator.skip(self.rank) # stagger the starting point of each GPU
+            fill_cache()
         
     def __len__(self):
         # For streaming datasets, we need to provide an approximate length
@@ -107,19 +100,16 @@ class StreamingDreamBoothDataset(Dataset):
         return self.dataset_length * self.repeats
 
     def __getitem__(self, index):
-        # Calculate which item we want within the current cache
-        cache_index = self._current_cache_index
-        
         # If we've gone through all items in the current cache, refill it
-        if cache_index >= len(self._current_items):
+        if self._current_cache_index >= len(self._current_items):
             self._refill_cache()
-            cache_index = 0
+            assert self._current_cache_index == 0, "Cache index should be 0 after refill"
         
         # Get the streaming item
-        stream_item = self._current_items[cache_index]
+        stream_item = self._current_items[self._current_cache_index]
         
         # Increment cache index for next access
-        self._current_cache_index = (cache_index + 1) % len(self._current_items)
+        self._current_cache_index += 1
         
         example = {}
         

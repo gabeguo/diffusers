@@ -45,7 +45,7 @@ class StreamingDreamBoothDataset(Dataset):
         self._dataset_iterator = iter(self.streaming_dataset)
         self._current_items = []  # Cache for current batch of items
         self._cache_size = 1000  # Number of items to cache
-        self._current_index = 0
+        self._current_cache_index = 0  # Track position within current cache
         
         # Pre-load initial batch
         self._refill_cache()
@@ -65,6 +65,10 @@ class StreamingDreamBoothDataset(Dataset):
 
     def _refill_cache(self):
         """Refill the cache with new items from the streaming dataset."""
+        # Clear the old cache to free memory
+        self._current_items.clear()
+        self._current_cache_index = 0
+        
         new_items = []
         try:
             for _ in range(self._cache_size):
@@ -83,10 +87,10 @@ class StreamingDreamBoothDataset(Dataset):
                         new_items.append(item)
             except StopIteration:
                 # If still no items, something is wrong
-                if not new_items and not self._current_items:
+                if not new_items:
                     raise RuntimeError("Unable to load any items from the streaming dataset")
         
-        self._current_items.extend(new_items)
+        self._current_items = new_items  # Replace instead of extend
         
     def __len__(self):
         # For streaming datasets, we need to provide an approximate length
@@ -94,16 +98,19 @@ class StreamingDreamBoothDataset(Dataset):
         return self.dataset_length * self.repeats
 
     def __getitem__(self, index):
-        # Check if we need to refill cache
-        cache_index = index % len(self._current_items) if self._current_items else 0
+        # Calculate which item we want within the current cache
+        cache_index = self._current_cache_index
         
-        # If we're running low on cached items, refill
-        if cache_index >= len(self._current_items) - 100:
+        # If we've gone through all items in the current cache, refill it
+        if cache_index >= len(self._current_items):
             self._refill_cache()
-            cache_index = index % len(self._current_items)
+            cache_index = 0
         
         # Get the streaming item
         stream_item = self._current_items[cache_index]
+        
+        # Increment cache index for next access
+        self._current_cache_index = (cache_index + 1) % len(self._current_items)
         
         example = {}
         

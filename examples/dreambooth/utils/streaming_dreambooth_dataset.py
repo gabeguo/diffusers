@@ -15,7 +15,9 @@ class StreamingDreamBoothDataset(Dataset):
         repeats=1,
         center_crop=False,
         cache_dir=None,
-        dataset_length=None,  # Approximate length for __len__
+        dataset_length=None,  # Approximate length for __len__,
+        rank=0,
+        world_size=1,
     ):
         try:
             from datasets import load_dataset
@@ -31,7 +33,14 @@ class StreamingDreamBoothDataset(Dataset):
         self.instance_prompt = instance_prompt
         self.class_prompt = class_prompt
         self.dataset_length = dataset_length or 100000  # Default approximate length
-        
+
+        self.rank = rank
+        self.world_size = world_size
+
+        if self.world_size > 1:
+            # every GPU sees different data (not exactly even tho)
+            dataset_urls = dataset_urls[self.rank::self.world_size]
+
         # Load streaming dataset
         self.streaming_dataset = load_dataset(
             "webdataset", 
@@ -145,6 +154,8 @@ def create_streaming_dreambooth_dataset(
     center_crop=False,
     cache_dir="/pscratch/sd/g/gabeguo/cache/huggingface",
     dataset_length=100000,
+    rank=0,
+    world_size=1,
 ):
     """
     Create a StreamingDreamBoothDataset using the text-to-image-2M dataset.
@@ -164,4 +175,6 @@ def create_streaming_dreambooth_dataset(
         center_crop=center_crop,
         cache_dir=cache_dir,
         dataset_length=dataset_length,
+        rank=rank,
+        world_size=world_size,
     )

@@ -49,19 +49,11 @@ class StreamingDreamBoothDataset(Dataset):
         
         # Pre-load initial batch
         self._refill_cache()
-        
-        # Setup class images if provided
-        if class_data_root is not None:
-            self.class_data_root = Path(class_data_root)
-            self.class_data_root.mkdir(parents=True, exist_ok=True)
-            self.class_images_path = list(self.class_data_root.iterdir())
-            if class_num is not None:
-                self.num_class_images = min(len(self.class_images_path), class_num)
-            else:
-                self.num_class_images = len(self.class_images_path)
-        else:
-            self.class_data_root = None
-            self.num_class_images = 0
+
+        assert class_prompt is None, "Class prompt is not supported for streaming dataset"
+        assert class_data_root is None, "Class data root is not supported for streaming dataset"
+        assert class_num is None, "Class number is not supported for streaming dataset"
+        assert repeats == 1, "Repeats is not supported for streaming dataset"
 
         # Image transforms (no data augmentation as requested)
         self.image_transforms = transforms.Compose([
@@ -130,17 +122,7 @@ class StreamingDreamBoothDataset(Dataset):
         if 'json' in stream_item and 'prompt' in stream_item['json']:
             example["instance_prompt"] = stream_item['json']['prompt']
         else:
-            example["instance_prompt"] = self.instance_prompt
-        
-        # Handle class images if provided
-        if self.class_data_root and self.num_class_images > 0:
-            class_image = Image.open(self.class_images_path[index % self.num_class_images])
-            class_image = exif_transpose(class_image)
-            
-            if not class_image.mode == "RGB":
-                class_image = class_image.convert("RGB")
-            example["class_images"] = self.image_transforms(class_image)
-            example["class_prompt"] = self.class_prompt
+            raise ValueError("Prompt not found in the dataset")
         
         return example
 
@@ -148,7 +130,7 @@ class StreamingDreamBoothDataset(Dataset):
 # Convenience function to create the streaming dataset with the same URLs as in your example
 def create_streaming_dreambooth_dataset(
     instance_prompt,
-    class_prompt,
+    class_prompt=None,
     class_data_root=None,
     class_num=None,
     size=1024,

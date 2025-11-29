@@ -17,4 +17,5 @@ accelerate launch train_dreambooth_lora_flux.py \
   --lr_warmup_steps=0 \
   --max_train_steps=500 \
   --seed="0" \
-  --cache_dir="/pscratch/sd/g/gabeguo/cache/huggingface"
+  --cache_dir="/pscratch/sd/g/gabeguo/cache/huggingface" \
+  --streaming

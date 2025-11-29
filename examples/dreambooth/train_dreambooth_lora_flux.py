@@ -262,6 +262,11 @@ def import_model_class_from_model_name_or_path(
 def parse_args(input_args=None):
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
     parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="Whether to use streaming dataset.",
+    )
+    parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
         default=None,
@@ -700,6 +705,8 @@ def parse_args(input_args=None):
         args = parser.parse_args(input_args)
     else:
         args = parser.parse_args()
+    if args.streaming:
+        print("Im streaming!!!")
 
     if args.dataset_name is None and args.instance_data_dir is None:
         raise ValueError("Specify either `--dataset_name` or `--instance_data_dir`")
@@ -1490,33 +1497,98 @@ def main(args):
         )
 
     # Dataset and DataLoaders creation:
-    train_dataset = DreamBoothDataset(
-        instance_data_root=args.instance_data_dir,
-        instance_prompt=args.instance_prompt,
-        class_prompt=args.class_prompt,
-        class_data_root=args.class_data_dir if args.with_prior_preservation else None,
-        class_num=args.num_class_images,
-        size=args.resolution,
-        repeats=args.repeats,
-        center_crop=args.center_crop,
-    )
+    if args.streaming:
+        # TODO: check if this is right
+        from datasets import load_dataset
+        base_url = "https://huggingface.co/datasets/jackyhate/text-to-image-2M/resolve/main/data_512_2M/data_{i:06d}.tar"
+        num_shards = 46  # Number of webdataset tar files
+        urls = [base_url.format(i=i) for i in range(num_shards)]
+        train_dataset = load_dataset("webdataset", data_files={"train": urls}, split="train", streaming=True, cache_dir=args.cache_dir)
+        def transform_fn(example):
+            assert isinstance(example, dict)
+            assert isinstance(example['jpg'], Image.Image)
+            assert isinstance(example['json'], dict)
+            assert isinstance(example['json']['prompt'], str)
 
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=args.train_batch_size,
-        shuffle=True,
-        collate_fn=lambda examples: collate_fn(examples, args.with_prior_preservation),
-        num_workers=args.dataloader_num_workers,
-    )
+            curr_image = example['jpg']
+            curr_image = exif_transpose(curr_image)
+            if not curr_image.mode == "RGB":
+                curr_image = curr_image.convert("RGB")
+            image_transforms = transforms.Compose(
+                [
+                    transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+                    transforms.CenterCrop(args.resolution) if args.center_crop else transforms.RandomCrop(args.resolution),
+                    transforms.ToTensor(),
+                    transforms.Normalize([0.5], [0.5]),
+                ]
+            )
+            curr_image = image_transforms(curr_image)
+
+            prompt = example['json']['prompt']
+            tokens_one = tokenize_prompt(tokenizer_one, prompt, max_sequence_length=77)
+            tokens_two = tokenize_prompt(
+                tokenizer_two, prompt, max_sequence_length=args.max_sequence_length
+            )
+            assert tokens_one.shape == (1, 77)
+            assert tokens_two.shape == (1, args.max_sequence_length)
+
+            return {
+                'instance_images': curr_image,
+                # 'instance_prompt': example['json']['prompt']
+                'tokens_one': tokens_one,
+                'tokens_two': tokens_two,
+            }
+
+        def streaming_collate_fn(examples):
+            pixel_values = [example["instance_images"] for example in examples]
+            tokens_one = [example["tokens_one"] for example in examples]
+            tokens_two = [example["tokens_two"] for example in examples]
+
+            pixel_values = torch.stack(pixel_values)
+            pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
+            tokens_one = torch.cat(tokens_one, dim=0)
+            tokens_one = tokens_one.to(memory_format=torch.contiguous_format).long()
+            tokens_two = torch.cat(tokens_two, dim=0)
+            tokens_two = tokens_two.to(memory_format=torch.contiguous_format).long()
+
+            batch = {"pixel_values": pixel_values, "tokens_one": tokens_one, "tokens_two": tokens_two}
+            return batch
+
+        train_dataset = train_dataset.map(transform_fn).select_columns(["instance_images", "tokens_one", "tokens_two"])
+        train_dataloader = torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=args.train_batch_size,
+            num_workers=args.dataloader_num_workers,
+            collate_fn=streaming_collate_fn,
+        )
+    else:
+        train_dataset = DreamBoothDataset(
+            instance_data_root=args.instance_data_dir,
+            instance_prompt=args.instance_prompt,
+            class_prompt=args.class_prompt,
+            class_data_root=args.class_data_dir if args.with_prior_preservation else None,
+            class_num=args.num_class_images,
+            size=args.resolution,
+            repeats=args.repeats,
+            center_crop=args.center_crop,
+        )
+
+        train_dataloader = torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=args.train_batch_size,
+            shuffle=True,
+            collate_fn=lambda examples: collate_fn(examples, args.with_prior_preservation),
+            num_workers=args.dataloader_num_workers,
+        )
 
     if not args.train_text_encoder:
         tokenizers = [tokenizer_one, tokenizer_two]
         text_encoders = [text_encoder_one, text_encoder_two]
 
-        def compute_text_embeddings(prompt, text_encoders, tokenizers):
+        def compute_text_embeddings(prompt, text_encoders, tokenizers, tokens_one=None, tokens_two=None):
             with torch.no_grad():
                 prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
-                    text_encoders, tokenizers, prompt, args.max_sequence_length
+                    text_encoders, tokenizers, prompt, args.max_sequence_length, text_input_ids_list=[tokens_one, tokens_two]
                 )
                 prompt_embeds = prompt_embeds.to(accelerator.device)
                 pooled_prompt_embeds = pooled_prompt_embeds.to(accelerator.device)
@@ -1526,7 +1598,7 @@ def main(args):
     # If no type of tuning is done on the text_encoder and custom instance prompts are NOT
     # provided (i.e. the --instance_prompt is used for all images), we encode the instance prompt once to avoid
     # the redundant encoding.
-    if not args.train_text_encoder and not train_dataset.custom_instance_prompts:
+    if not args.streaming and not args.train_text_encoder and not train_dataset.custom_instance_prompts:
         instance_prompt_hidden_states, instance_pooled_prompt_embeds, instance_text_ids = compute_text_embeddings(
             args.instance_prompt, text_encoders, tokenizers
         )
@@ -1539,7 +1611,7 @@ def main(args):
             )
 
     # Clear the memory here
-    if not args.train_text_encoder and not train_dataset.custom_instance_prompts:
+    if not args.streaming and not args.train_text_encoder and not train_dataset.custom_instance_prompts:
         del text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two
         free_memory()
 
@@ -1547,7 +1619,7 @@ def main(args):
     # pack the statically computed variables appropriately here. This is so that we don't
     # have to pass them to the dataloader.
 
-    if not train_dataset.custom_instance_prompts:
+    if not args.streaming and not train_dataset.custom_instance_prompts:
         if not args.train_text_encoder:
             prompt_embeds = instance_prompt_hidden_states
             pooled_prompt_embeds = instance_pooled_prompt_embeds
@@ -1590,6 +1662,7 @@ def main(args):
     # Scheduler and math around the number of training steps.
     # Check the PR https://github.com/huggingface/diffusers/pull/8312 for detailed explanation.
     num_warmup_steps_for_scheduler = args.lr_warmup_steps * accelerator.num_processes
+    assert args.max_train_steps is not None
     if args.max_train_steps is None:
         len_train_dataloader_after_sharding = math.ceil(len(train_dataloader) / accelerator.num_processes)
         num_update_steps_per_epoch = math.ceil(len_train_dataloader_after_sharding / args.gradient_accumulation_steps)
@@ -1629,7 +1702,9 @@ def main(args):
         )
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    if not args.streaming:
+        num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    """
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         if num_training_steps_for_scheduler != args.max_train_steps:
@@ -1640,6 +1715,7 @@ def main(args):
             )
     # Afterwards we recalculate our number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
+    """
 
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
@@ -1651,8 +1727,10 @@ def main(args):
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(train_dataset)}")
-    logger.info(f"  Num batches each epoch = {len(train_dataloader)}")
+    if not args.streaming:
+        logger.info(f"  Num examples = {len(train_dataset)}")
+        logger.info(f"  Num batches each epoch = {len(train_dataloader)}")
+    logger.info(f"  Total steps = {args.max_train_steps}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
     logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
@@ -1684,7 +1762,10 @@ def main(args):
             global_step = int(path.split("-")[1])
 
             initial_global_step = global_step
-            first_epoch = global_step // num_update_steps_per_epoch
+            if args.streaming:
+                first_epoch = 0
+            else:
+                first_epoch = global_step // num_update_steps_per_epoch
 
     else:
         initial_global_step = 0
@@ -1720,19 +1801,28 @@ def main(args):
             if args.train_text_encoder:
                 models_to_accumulate.extend([text_encoder_one])
             with accelerator.accumulate(models_to_accumulate):
-                prompts = batch["prompts"]
+                # prompts = batch["prompts"]
+                tokens_one = batch["tokens_one"]
+                tokens_two = batch["tokens_two"]
 
                 # encode batch prompts when custom prompts are provided for each image -
-                if train_dataset.custom_instance_prompts:
+                # NOTE: runs up to here
+                if args.streaming or train_dataset.custom_instance_prompts:
                     if not args.train_text_encoder:
                         prompt_embeds, pooled_prompt_embeds, text_ids = compute_text_embeddings(
-                            prompts, text_encoders, tokenizers
+                            prompt=[None for _ in range(len(tokens_one))],
+                            text_encoders=text_encoders,
+                            tokenizers=[None, None],
+                            tokens_one=tokens_one,
+                            tokens_two=tokens_two,
                         )
                     else:
+                        """
                         tokens_one = tokenize_prompt(tokenizer_one, prompts, max_sequence_length=77)
                         tokens_two = tokenize_prompt(
                             tokenizer_two, prompts, max_sequence_length=args.max_sequence_length
                         )
+                        """
                         prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
                             text_encoders=[text_encoder_one, text_encoder_two],
                             tokenizers=[None, None],
@@ -1757,7 +1847,11 @@ def main(args):
                         )
                     else:
                         prompt_embeds, pooled_prompt_embeds, text_ids = compute_text_embeddings(
-                            prompts, text_encoders, tokenizers
+                            prompt=[None for _ in range(len(tokens_one))], 
+                            text_encoders=text_encoders, 
+                            tokenizers=[None, None],
+                            tokens_one=tokens_one,
+                            tokens_two=tokens_two,
                         )
 
                 # Convert images to latent space

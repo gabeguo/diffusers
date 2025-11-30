@@ -61,13 +61,14 @@ from torchvision import transforms
 from torchvision.transforms.functional import crop
 from tqdm.auto import tqdm
 from transformers import CLIPTokenizer, PretrainedConfig, T5TokenizerFast
+
 from utils.dual_time_embedder import add_dual_time_embedder
+from utils.two_timestep_inference import FluxPipelineTwoTimestep as FluxPipeline
 
 import diffusers
 from diffusers import (
     AutoencoderKL,
     FlowMatchEulerDiscreteScheduler,
-    FluxPipeline,
     FluxTransformer2DModel,
 )
 from diffusers.optimization import get_scheduler
@@ -1937,6 +1938,8 @@ def main(args):
                 indices2 = (u2 * noise_scheduler_copy.config.num_train_timesteps).long()
                 timesteps2 = noise_scheduler_copy.timesteps[indices2].to(device=model_input.device)
                 # TODO: for now, let it go backwards, but later let timesteps2 be the end time
+                # TODO: I don't think the loss function should rely on sigma2
+                # TODO: work on inference pipeline
 
                 # Add noise according to flow matching.
                 # zt = (1 - texp) * x + texp * z1

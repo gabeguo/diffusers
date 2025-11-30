@@ -42,7 +42,7 @@ else:
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
-def FluxPipelineTwoTimestep(FluxPipeline):
+class FluxPipelineTwoTimestep(FluxPipeline):
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(

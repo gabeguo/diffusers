@@ -1,4 +1,48 @@
+import inspect
+from typing import Any, Callable, Dict, List, Optional, Union
 
+import numpy as np
+import torch
+from transformers import (
+    CLIPImageProcessor,
+    CLIPTextModel,
+    CLIPTokenizer,
+    CLIPVisionModelWithProjection,
+    T5EncoderModel,
+    T5TokenizerFast,
+)
+
+from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
+from diffusers.loaders import FluxIPAdapterMixin, FluxLoraLoaderMixin, FromSingleFileMixin, TextualInversionLoaderMixin
+from diffusers.models import AutoencoderKL, FluxTransformer2DModel
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+from diffusers.utils import (
+    USE_PEFT_BACKEND,
+    deprecate,
+    is_torch_xla_available,
+    logging,
+    replace_example_docstring,
+    scale_lora_layers,
+    unscale_lora_layers,
+)
+from diffusers.utils.torch_utils import randn_tensor
+from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+from diffusers.pipelines.flux.pipeline_output import FluxPipelineOutput
+
+from diffusers.pipelines.flux.pipeline_flux import calculate_shift, retrieve_timesteps
+from diffusers.pipelines.flux.pipeline_flux import FluxPipeline
+
+if is_torch_xla_available():
+    import torch_xla.core.xla_model as xm
+
+    XLA_AVAILABLE = True
+else:
+    XLA_AVAILABLE = False
+
+
+logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+
+def FluxPipelineTwoTimestep(FluxPipeline):
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
@@ -289,11 +333,16 @@
                     self._joint_attention_kwargs["ip_adapter_image_embeds"] = image_embeds
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
+                if i == len(timesteps) - 1:
+                    assert torch.all(timestep < 2 / len(timesteps)) # make sure we're going to 0
+                    timestep2 = torch.zeros_like(timestep) # TODO: check that 0 is data: https://arxiv.org/pdf/2506.15742
+                else:
+                    timestep2 = timesteps[i + 1].expand(latents.shape[0]).to(latents.dtype)
 
                 with self.transformer.cache_context("cond"):
                     noise_pred = self.transformer(
                         hidden_states=latents,
-                        timestep=timestep / 1000,
+                        timestep=(timestep / 1000, timestep2 / 1000),
                         guidance=guidance,
                         pooled_projections=pooled_prompt_embeds,
                         encoder_hidden_states=prompt_embeds,
@@ -310,7 +359,7 @@
                     with self.transformer.cache_context("uncond"):
                         neg_noise_pred = self.transformer(
                             hidden_states=latents,
-                            timestep=timestep / 1000,
+                            timestep=(timestep / 1000, timestep2 / 1000),
                             guidance=guidance,
                             pooled_projections=negative_pooled_prompt_embeds,
                             encoder_hidden_states=negative_prompt_embeds,

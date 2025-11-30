@@ -23,4 +23,5 @@ class DualTimeEmbedder(torch.nn.Module):
 
 def add_dual_time_embedder(single_time_flux_transformer):
     single_time_flux_transformer.time_text_embed = DualTimeEmbedder(single_time_flux_transformer.time_text_embed)
+    print("Added dual time embeddings")
     return single_time_flux_transformer

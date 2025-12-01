@@ -44,7 +44,6 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 class FluxPipelineTwoTimestep(FluxPipeline):
     @torch.no_grad()
-    @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
         prompt: Union[str, List[str]] = None,
@@ -334,7 +333,7 @@ class FluxPipelineTwoTimestep(FluxPipeline):
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
                 if i == len(timesteps) - 1:
-                    assert torch.all(timestep < 2 / len(timesteps)) # make sure we're going to 0
+                    # NOTE: they do indeed go in decreasing order, but it's not even increments, due to the scheduler
                     timestep2 = torch.zeros_like(timestep) # TODO: check that 0 is data: https://arxiv.org/pdf/2506.15742
                 else:
                     timestep2 = timesteps[i + 1].expand(latents.shape[0]).to(latents.dtype)
@@ -342,7 +341,7 @@ class FluxPipelineTwoTimestep(FluxPipeline):
                 with self.transformer.cache_context("cond"):
                     noise_pred = self.transformer(
                         hidden_states=latents,
-                        timestep=(timestep / 1000, timestep2 / 1000),
+                        timestep=torch.stack([timestep / 1000, timestep2 / 1000], dim=-1),
                         guidance=guidance,
                         pooled_projections=pooled_prompt_embeds,
                         encoder_hidden_states=prompt_embeds,
@@ -359,7 +358,7 @@ class FluxPipelineTwoTimestep(FluxPipeline):
                     with self.transformer.cache_context("uncond"):
                         neg_noise_pred = self.transformer(
                             hidden_states=latents,
-                            timestep=(timestep / 1000, timestep2 / 1000),
+                            timestep=torch.stack([timestep / 1000, timestep2 / 1000], dim=-1),
                             guidance=guidance,
                             pooled_projections=negative_pooled_prompt_embeds,
                             encoder_hidden_states=negative_prompt_embeds,

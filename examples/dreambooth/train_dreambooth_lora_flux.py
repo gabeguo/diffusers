@@ -1069,6 +1069,7 @@ def encode_prompt(
     num_images_per_prompt: int = 1,
     text_input_ids_list=None,
 ):
+    assert all([_ is None for _ in tokenizers])
     prompt = [prompt] if isinstance(prompt, str) else prompt
 
     if hasattr(text_encoders[0], "module"):
@@ -1965,7 +1966,7 @@ def main(args):
                 model_pred = transformer(
                     hidden_states=packed_noisy_model_input,
                     # YiYi notes: divide it by 1000 for now because we scale it by 1000 in the transformer model (we should not keep it but I want to keep the inputs same for the model for testing)
-                    timestep=(timesteps / 1000, timesteps2 / 1000),
+                    timestep=torch.stack([timesteps / 1000, timesteps2 / 1000], dim=-1),
                     guidance=guidance,
                     pooled_projections=pooled_prompt_embeds,
                     encoder_hidden_states=prompt_embeds,

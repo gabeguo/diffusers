@@ -1544,7 +1544,7 @@ def main(args):
             tokens_one = [example["tokens_one"] for example in examples]
             tokens_two = [example["tokens_two"] for example in examples]
 
-            pixel_values = torch.stack(pixel_values)
+            pixel_values = torch.stack(pixel_values) # NOTE: verified that the data loader is correct, by setting this to zeros which causes the training to degenerate and converge super quickly
             pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
             tokens_one = torch.cat(tokens_one, dim=0)
             tokens_one = tokens_one.to(memory_format=torch.contiguous_format).long()
@@ -1586,6 +1586,8 @@ def main(args):
         text_encoders = [text_encoder_one, text_encoder_two]
 
         def compute_text_embeddings(prompt, text_encoders, tokenizers, tokens_one=None, tokens_two=None):
+            assert all([_ is None for _ in prompt])
+            assert all([_ is None for _ in tokenizers])
             with torch.no_grad():
                 prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
                     text_encoders, tokenizers, prompt, args.max_sequence_length, text_input_ids_list=[tokens_one, tokens_two]
@@ -1599,12 +1601,14 @@ def main(args):
     # provided (i.e. the --instance_prompt is used for all images), we encode the instance prompt once to avoid
     # the redundant encoding.
     if not args.streaming and not args.train_text_encoder and not train_dataset.custom_instance_prompts:
+        raise ValueError("Should not be doing this one")
         instance_prompt_hidden_states, instance_pooled_prompt_embeds, instance_text_ids = compute_text_embeddings(
             args.instance_prompt, text_encoders, tokenizers
         )
 
     # Handle class prompt for prior-preservation.
     if args.with_prior_preservation:
+        raise ValueError("Should not be doing this one")
         if not args.train_text_encoder:
             class_prompt_hidden_states, class_pooled_prompt_embeds, class_text_ids = compute_text_embeddings(
                 args.class_prompt, text_encoders, tokenizers
@@ -1612,6 +1616,7 @@ def main(args):
 
     # Clear the memory here
     if not args.streaming and not args.train_text_encoder and not train_dataset.custom_instance_prompts:
+        raise ValueError("Should not be doing this one")
         del text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two
         free_memory()
 
@@ -1620,6 +1625,7 @@ def main(args):
     # have to pass them to the dataloader.
 
     if not args.streaming and not train_dataset.custom_instance_prompts:
+        raise ValueError("Should not be doing this one")
         if not args.train_text_encoder:
             prompt_embeds = instance_prompt_hidden_states
             pooled_prompt_embeds = instance_pooled_prompt_embeds
@@ -1703,6 +1709,7 @@ def main(args):
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     if not args.streaming:
+        raise ValueError("Should not be doing this one")
         num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     """
     if args.max_train_steps is None:
@@ -1805,8 +1812,14 @@ def main(args):
                 tokens_one = batch["tokens_one"]
                 tokens_two = batch["tokens_two"]
 
+                """
+                # NOTE: this is a sanity check (it verifies that the data loader splits correctly)
+                decoded_tokens_one = tokenizer_one.decode(tokens_one[0], skip_special_tokens=True)
+                decoded_tokens_two = tokenizer_two.decode(tokens_two[0], skip_special_tokens=True)
+                print(f"rank: {accelerator.process_index}, step: {step}, decoded_tokens_one: {decoded_tokens_one}, decoded_tokens_two: {decoded_tokens_two}")
+                """
+
                 # encode batch prompts when custom prompts are provided for each image -
-                # NOTE: runs up to here
                 if args.streaming or train_dataset.custom_instance_prompts:
                     if not args.train_text_encoder:
                         prompt_embeds, pooled_prompt_embeds, text_ids = compute_text_embeddings(
@@ -1832,6 +1845,8 @@ def main(args):
                             prompt=prompts,
                         )
                 else:
+                    raise ValueError("Should not be doing this one")
+                    """
                     elems_to_repeat = len(prompts)
                     if args.train_text_encoder:
                         prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
@@ -1853,6 +1868,7 @@ def main(args):
                             tokens_one=tokens_one,
                             tokens_two=tokens_two,
                         )
+                    """
 
                 # Convert images to latent space
                 if args.cache_latents:

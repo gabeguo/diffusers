@@ -17,7 +17,7 @@ class DualTimeEmbedder(torch.nn.Module):
             emb2 = self.second_embedder(t2, guidance, pooled_projections)
             # Combine them (e.g., average)
             return (emb1 + emb2) / 2
-        raise ValueError(f"Timestep must be stacked timesteps, got {timestep.shape}")
+        # raise ValueError(f"Timestep must be stacked timesteps, got {timestep.shape}")
         # Fallback for standard single timestep
         return self.original_embedder(timestep, guidance, pooled_projections)
 

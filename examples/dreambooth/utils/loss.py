@@ -34,10 +34,10 @@ def lsd_loss(transformer, x_t0, t0, t1, guidance, pooled_prompt_embeds, prompt_e
     )
     x_t1 = x_t0 + (t1 - t0) * v_t0_t1
 
-    with model.disable_adapters(), torch.no_grad():
+    with transformer.disable_adapters(), torch.no_grad():
         # recover the original model
         v_t1_t1 = v_func(x_t1, t1, None).detach()
-    model.enable_adapters()
+    transformer.enable_adapters()
 
     diff = v_t0_t1 + (t1 - t0) * d_t1_v_t0_t1 - v_t1_t1.detach()
     # TODO: weighting?

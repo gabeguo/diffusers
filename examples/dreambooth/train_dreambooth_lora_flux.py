@@ -62,11 +62,13 @@ from torchvision.transforms.functional import crop
 from tqdm.auto import tqdm
 from transformers import CLIPTokenizer, PretrainedConfig, T5TokenizerFast
 
+from utils.dual_time_embedder import add_dual_time_embedder
+from utils.two_timestep_inference import FluxPipelineTwoTimestep as FluxPipeline
+
 import diffusers
 from diffusers import (
     AutoencoderKL,
     FlowMatchEulerDiscreteScheduler,
-    FluxPipeline,
     FluxTransformer2DModel,
 )
 from diffusers.optimization import get_scheduler
@@ -567,6 +569,25 @@ def parse_args(input_args=None):
         help="Scale of mode weighting scheme. Only effective when using the `'mode'` as the `weighting_scheme`.",
     )
     parser.add_argument(
+        "--weighting_scheme_2",
+        type=str,
+        default="none",
+        choices=["sigma_sqrt", "logit_normal", "mode", "cosmap", "none"],
+        help=('We default to the "none" weighting scheme for uniform sampling and uniform loss'),
+    )
+    parser.add_argument(
+        "--logit_mean_2", type=float, default=0.0, help="mean to use when using the `'logit_normal'` weighting scheme."
+    )
+    parser.add_argument(
+        "--logit_std_2", type=float, default=1.0, help="std to use when using the `'logit_normal'` weighting scheme."
+    )
+    parser.add_argument(
+        "--mode_scale_2",
+        type=float,
+        default=1.29,
+        help="Scale of mode weighting scheme. Only effective when using the `'mode'` as the `weighting_scheme`.",
+    )
+    parser.add_argument(
         "--optimizer",
         type=str,
         default="AdamW",
@@ -719,6 +740,7 @@ def parse_args(input_args=None):
         args.local_rank = env_local_rank
 
     if args.with_prior_preservation:
+        raise ValueError("should not do this one")
         if args.class_data_dir is None:
             raise ValueError("You must specify a data directory for class images.")
         if args.class_prompt is None:
@@ -1047,6 +1069,7 @@ def encode_prompt(
     num_images_per_prompt: int = 1,
     text_input_ids_list=None,
 ):
+    assert all([_ is None for _ in tokenizers])
     prompt = [prompt] if isinstance(prompt, str) else prompt
 
     if hasattr(text_encoders[0], "module"):
@@ -1131,6 +1154,7 @@ def main(args):
 
     # Generate class images if prior preservation is enabled.
     if args.with_prior_preservation:
+        raise ValueError("should not do this one")
         class_images_dir = Path(args.class_data_dir)
         if not class_images_dir.exists():
             class_images_dir.mkdir(parents=True)
@@ -1243,6 +1267,8 @@ def main(args):
                 args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant,
                 cache_dir=args.cache_dir, low_cpu_mem_usage=True,
             )
+            transformer = add_dual_time_embedder(transformer) # Accept two time embeddings!
+            # TODO: may need to increase LoRA rank on second time embedder
             transformer.to(accelerator.device, dtype=weight_dtype)
             print(f"Loaded transformer for rank {rank}")
         accelerator.wait_for_everyone()
@@ -1296,6 +1322,10 @@ def main(args):
             "ff.net.2",
             "ff_context.net.0.proj",
             "ff_context.net.2",
+            "time_text_embed.original_embedder.timestep_embedder.linear_1",
+            "time_text_embed.original_embedder.timestep_embedder.linear_2",
+            "time_text_embed.second_embedder.timestep_embedder.linear_1",
+            "time_text_embed.second_embedder.timestep_embedder.linear_2",
         ]
 
     # now we will add new LoRA weights the transformer layers
@@ -1562,6 +1592,7 @@ def main(args):
             collate_fn=streaming_collate_fn,
         )
     else:
+        raise ValueError("should not do this one")
         train_dataset = DreamBoothDataset(
             instance_data_root=args.instance_data_dir,
             instance_prompt=args.instance_prompt,
@@ -1599,12 +1630,14 @@ def main(args):
     # provided (i.e. the --instance_prompt is used for all images), we encode the instance prompt once to avoid
     # the redundant encoding.
     if not args.streaming and not args.train_text_encoder and not train_dataset.custom_instance_prompts:
+        raise ValueError("should not do this one")
         instance_prompt_hidden_states, instance_pooled_prompt_embeds, instance_text_ids = compute_text_embeddings(
             args.instance_prompt, text_encoders, tokenizers
         )
 
     # Handle class prompt for prior-preservation.
     if args.with_prior_preservation:
+        raise ValueError("should not do this one")
         if not args.train_text_encoder:
             class_prompt_hidden_states, class_pooled_prompt_embeds, class_text_ids = compute_text_embeddings(
                 args.class_prompt, text_encoders, tokenizers
@@ -1612,6 +1645,7 @@ def main(args):
 
     # Clear the memory here
     if not args.streaming and not args.train_text_encoder and not train_dataset.custom_instance_prompts:
+        raise ValueError("should not do this one")
         del text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two
         free_memory()
 
@@ -1620,11 +1654,13 @@ def main(args):
     # have to pass them to the dataloader.
 
     if not args.streaming and not train_dataset.custom_instance_prompts:
+        raise ValueError("should not do this one")
         if not args.train_text_encoder:
             prompt_embeds = instance_prompt_hidden_states
             pooled_prompt_embeds = instance_pooled_prompt_embeds
             text_ids = instance_text_ids
             if args.with_prior_preservation:
+                raise ValueError("should not do this one")
                 prompt_embeds = torch.cat([prompt_embeds, class_prompt_hidden_states], dim=0)
                 pooled_prompt_embeds = torch.cat([pooled_prompt_embeds, class_pooled_prompt_embeds], dim=0)
                 text_ids = torch.cat([text_ids, class_text_ids], dim=0)
@@ -1636,6 +1672,7 @@ def main(args):
                 tokenizer_two, args.instance_prompt, max_sequence_length=args.max_sequence_length
             )
             if args.with_prior_preservation:
+                raise ValueError("should not do this one")
                 class_tokens_one = tokenize_prompt(tokenizer_one, args.class_prompt, max_sequence_length=77)
                 class_tokens_two = tokenize_prompt(
                     tokenizer_two, args.class_prompt, max_sequence_length=args.max_sequence_length
@@ -1703,6 +1740,7 @@ def main(args):
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     if not args.streaming:
+        raise ValueError("should not do this one")
         num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     """
     if args.max_train_steps is None:
@@ -1728,6 +1766,7 @@ def main(args):
 
     logger.info("***** Running training *****")
     if not args.streaming:
+        raise ValueError("should not do this one")
         logger.info(f"  Num examples = {len(train_dataset)}")
         logger.info(f"  Num batches each epoch = {len(train_dataloader)}")
     logger.info(f"  Total steps = {args.max_train_steps}")
@@ -1765,6 +1804,7 @@ def main(args):
             if args.streaming:
                 first_epoch = 0
             else:
+                raise ValueError("should not do this one")
                 first_epoch = global_step // num_update_steps_per_epoch
 
     else:
@@ -1829,9 +1869,10 @@ def main(args):
                             text_input_ids_list=[tokens_one, tokens_two],
                             max_sequence_length=args.max_sequence_length,
                             device=accelerator.device,
-                            prompt=prompts,
+                            prompt=[None for _ in range(len(tokens_one))],
                         )
                 else:
+                    raise ValueError("should not do this one")
                     elems_to_repeat = len(prompts)
                     if args.train_text_encoder:
                         prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
@@ -1888,6 +1929,19 @@ def main(args):
                 indices = (u * noise_scheduler_copy.config.num_train_timesteps).long()
                 timesteps = noise_scheduler_copy.timesteps[indices].to(device=model_input.device)
 
+                u2 = compute_density_for_timestep_sampling(
+                    weighting_scheme=args.weighting_scheme_2,
+                    batch_size=bsz,
+                    logit_mean=args.logit_mean_2,
+                    logit_std=args.logit_std_2,
+                    mode_scale=args.mode_scale_2,
+                )
+                indices2 = (u2 * noise_scheduler_copy.config.num_train_timesteps).long()
+                timesteps2 = noise_scheduler_copy.timesteps[indices2].to(device=model_input.device)
+                # TODO: for now, let it go backwards, but later let timesteps2 be the end time
+                # TODO: I don't think the loss function should rely on sigma2
+                # TODO: work on inference pipeline
+
                 # Add noise according to flow matching.
                 # zt = (1 - texp) * x + texp * z1
                 sigmas = get_sigmas(timesteps, n_dim=model_input.ndim, dtype=model_input.dtype)
@@ -1912,7 +1966,7 @@ def main(args):
                 model_pred = transformer(
                     hidden_states=packed_noisy_model_input,
                     # YiYi notes: divide it by 1000 for now because we scale it by 1000 in the transformer model (we should not keep it but I want to keep the inputs same for the model for testing)
-                    timestep=timesteps / 1000,
+                    timestep=torch.stack([timesteps / 1000, timesteps2 / 1000], dim=-1),
                     guidance=guidance,
                     pooled_projections=pooled_prompt_embeds,
                     encoder_hidden_states=prompt_embeds,
@@ -1935,6 +1989,7 @@ def main(args):
                 target = noise - model_input
 
                 if args.with_prior_preservation:
+                    raise ValueError("should not do this one")
                     # Chunk the noise and model_pred into two parts and compute the loss on each part separately.
                     model_pred, model_pred_prior = torch.chunk(model_pred, 2, dim=0)
                     target, target_prior = torch.chunk(target, 2, dim=0)
@@ -1956,6 +2011,7 @@ def main(args):
                 loss = loss.mean()
 
                 if args.with_prior_preservation:
+                    raise ValueError("should not do this one")
                     # Add the prior loss to the instance loss.
                     loss = loss + args.prior_loss_weight * prior_loss
 

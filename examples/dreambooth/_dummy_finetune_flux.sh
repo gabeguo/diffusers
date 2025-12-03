@@ -1,6 +1,6 @@
 export MODEL_NAME="black-forest-labs/FLUX.1-dev"
-export INSTANCE_DIR="dog"
-export OUTPUT_DIR="trained-flux-lora"
+export INSTANCE_DIR="does_not_exist"
+export OUTPUT_DIR="sanity-check-dual-embedding"
 export HF_HOME="/pscratch/sd/g/gabeguo/cache/huggingface"
 
 accelerate launch train_dreambooth_lora_flux.py \
@@ -8,7 +8,7 @@ accelerate launch train_dreambooth_lora_flux.py \
   --instance_data_dir=$INSTANCE_DIR \
   --output_dir=$OUTPUT_DIR \
   --mixed_precision="bf16" \
-  --instance_prompt="a photo of sks dog" \
+  --instance_prompt="" \
   --resolution=256 \
   --train_batch_size=1 \
   --gradient_accumulation_steps=4 \

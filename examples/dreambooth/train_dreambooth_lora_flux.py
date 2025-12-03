@@ -64,6 +64,7 @@ from transformers import CLIPTokenizer, PretrainedConfig, T5TokenizerFast
 
 from utils.dual_time_embedder import add_dual_time_embedder
 from utils.two_timestep_inference import FluxPipelineTwoTimestep as FluxPipeline
+from utils.loss import lsd_loss
 
 import diffusers
 from diffusers import (
@@ -1962,6 +1963,19 @@ def main(args):
                 else:
                     guidance = None
 
+                loss = lsd_loss(
+                    transformer=transformer, 
+                    x_t0=packed_noisy_model_input, 
+                    t0=timesteps, 
+                    t1=timesteps2, 
+                    guidance=guidance, 
+                    pooled_prompt_embeds=pooled_prompt_embeds, 
+                    prompt_embeds=prompt_embeds, 
+                    text_ids=text_ids, 
+                    latent_image_ids=latent_image_ids, 
+                )
+
+                """
                 # Predict the noise residual
                 model_pred = transformer(
                     hidden_states=packed_noisy_model_input,
@@ -2009,6 +2023,7 @@ def main(args):
                     1,
                 )
                 loss = loss.mean()
+                """
 
                 if args.with_prior_preservation:
                     raise ValueError("should not do this one")

@@ -1,15 +1,15 @@
 #!/bin/bash
 #
-#SBATCH --partition=m1266
-#SBATCH --account=m1266
-#SBATCH --job-name=flux-finetune
-#SBATCH --constraint=gpu
-#SBATCH --qos=regular
-#SBATCH --time=12:00:00
-#SBATCH --nodes=1                # Single node
-#SBATCH --gpus=a100:4
-#SBATCH --cpus-per-task=8       # CPUs for the job
-#SBATCH --ntasks=4            # Number of tasks (one per GPU)
+#SBATCH -A m1266
+#SBATCH -C gpu
+#SBATCH -q regular
+#SBATCH -t 12:00:00
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=4
+#SBATCH -c 32
+#SBATCH --gpus-per-task=1
+#SBATCH --gpu-bind=none
+#SBATCH --mem=224GB
 
 export MODEL_NAME="black-forest-labs/FLUX.1-dev"
 export INSTANCE_DIR="does_not_exist"

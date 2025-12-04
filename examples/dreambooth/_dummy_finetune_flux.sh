@@ -1,6 +1,6 @@
 export MODEL_NAME="black-forest-labs/FLUX.1-dev"
 export INSTANCE_DIR="does_not_exist"
-export OUTPUT_DIR="sanity-check-dual-embedding"
+export OUTPUT_DIR="try-lsd"
 export HF_HOME="/pscratch/sd/g/gabeguo/cache/huggingface"
 
 accelerate launch train_dreambooth_lora_flux.py \
@@ -12,10 +12,12 @@ accelerate launch train_dreambooth_lora_flux.py \
   --resolution=256 \
   --train_batch_size=1 \
   --gradient_accumulation_steps=4 \
-  --learning_rate=1e-4 \
+  --learning_rate=1e-3 \
   --lr_scheduler="constant" \
   --lr_warmup_steps=0 \
-  --max_train_steps=500 \
+  --max_train_steps=1000 \
   --seed="0" \
   --cache_dir="/pscratch/sd/g/gabeguo/cache/huggingface" \
-  --streaming
+  --streaming \
+  --rank=64 \
+  --gradient_checkpointing

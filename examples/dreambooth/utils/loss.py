@@ -22,6 +22,7 @@ def lsd_loss(transformer, x_t0, t0, t1, guidance, pooled_prompt_embeds, prompt_e
             return_dict=False,
         )[0]
         return v_t0_t1
+    # TODO: if this doesn't work, have debug logs to print the times
     t0 = t0 / 1000
     t1 = t1 / 1000
     v_t0_t1 = v_func(x_t0, t0, t1)
@@ -37,8 +38,8 @@ def lsd_loss(transformer, x_t0, t0, t1, guidance, pooled_prompt_embeds, prompt_e
     # TODO: double-check about scaling on dt, but I think this is the right way
     # TODO: can try central difference for more accuracy
     d_t1_v_t0_t1 = (
-        v_func(x_t0, t0, t1 + dt) - v_t0_t1
-    ) / dt
+        v_func(x_t0, t0, t1 + dt).detach() - v_func(x_t0, t0, t1 - dt).detach()
+    ) / (2 * dt)
     d_t1_v_t0_t1 = d_t1_v_t0_t1.detach() # TODO: can remove if we have more memory
 
     diff = v_t0_t1 + (t1 - t0) * d_t1_v_t0_t1 - v_t1_t1.detach()

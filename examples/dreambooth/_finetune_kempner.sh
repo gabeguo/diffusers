@@ -24,7 +24,7 @@ accelerate launch train_dreambooth_lora_flux.py \
   --mixed_precision="bf16" \
   --instance_prompt="" \
   --resolution=256 \
-  --train_batch_size=1 \
+  --train_batch_size=2 \
   --gradient_accumulation_steps=4 \
   --learning_rate=1e-5 \
   --lr_scheduler="constant" \

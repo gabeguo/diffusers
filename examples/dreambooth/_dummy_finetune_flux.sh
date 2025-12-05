@@ -13,7 +13,7 @@
 
 export MODEL_NAME="black-forest-labs/FLUX.1-dev"
 export INSTANCE_DIR="does_not_exist"
-export OUTPUT_DIR="lsd-finetune"
+export OUTPUT_DIR="lsd-finetune-rank-128-lr-1e-5"
 export HF_HOME="/pscratch/sd/g/gabeguo/cache/huggingface"
 
 accelerate launch train_dreambooth_lora_flux.py \
@@ -25,12 +25,12 @@ accelerate launch train_dreambooth_lora_flux.py \
   --resolution=256 \
   --train_batch_size=1 \
   --gradient_accumulation_steps=4 \
-  --learning_rate=1e-4 \
+  --learning_rate=1e-5 \
   --lr_scheduler="constant" \
   --lr_warmup_steps=0 \
   --max_train_steps=10000 \
   --seed="0" \
   --cache_dir="/pscratch/sd/g/gabeguo/cache/huggingface" \
   --streaming \
-  --rank=64 \
+  --rank=128 \
   --gradient_checkpointing

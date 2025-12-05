@@ -34,4 +34,5 @@ accelerate launch train_dreambooth_lora_flux.py \
   --cache_dir="/n/netscratch/albergo_lab/Everyone/gabeguo/hf_cache" \
   --streaming \
   --rank=128 \
+  --report_to="wandb" \
   --gradient_checkpointing

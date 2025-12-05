@@ -26,7 +26,9 @@ def lsd_loss(transformer, x_t0, t0, t1, guidance, pooled_prompt_embeds, prompt_e
     t0 = t0 / 1000
     t1 = t1 / 1000
     v_t0_t1 = v_func(x_t0, t0, t1)
-    x_t1 = x_t0 + (t1 - t0) * v_t0_t1
+    time_diff = (t1 - t0).reshape(-1, 1, 1)
+    assert len(time_diff.shape) == len(v_t0_t1.shape)
+    x_t1 = x_t0 + time_diff * v_t0_t1
 
     transformer.module.disable_adapters()
     with torch.no_grad():
@@ -42,7 +44,7 @@ def lsd_loss(transformer, x_t0, t0, t1, guidance, pooled_prompt_embeds, prompt_e
     ) / (2 * dt)
     d_t1_v_t0_t1 = d_t1_v_t0_t1.detach() # TODO: can remove if we have more memory
 
-    diff = v_t0_t1 + (t1 - t0) * d_t1_v_t0_t1 - v_t1_t1.detach()
+    diff = v_t0_t1 + time_diff * d_t1_v_t0_t1 - v_t1_t1.detach()
     # TODO: weighting?
     loss = torch.abs(diff).mean()
 

@@ -2,7 +2,7 @@ import torch
 from utils.two_timestep_inference import FluxPipelineTwoTimestep as FluxPipeline
 
 
-def lsd_loss(transformer, x_t0, t0, t1, guidance, pooled_prompt_embeds, prompt_embeds, text_ids, latent_image_ids, dt=5e-3):
+def lsd_loss(transformer, x_t0, t0, t1, guidance, pooled_prompt_embeds, prompt_embeds, text_ids, latent_image_ids, dt=5e-3, loss_type="l1"):
     # TODO: get rid of extra args
     # Predict the noise residual
     def v_func(the_x_t0, the_t0, the_t1):
@@ -46,6 +46,11 @@ def lsd_loss(transformer, x_t0, t0, t1, guidance, pooled_prompt_embeds, prompt_e
 
     diff = v_t0_t1 + time_diff * d_t1_v_t0_t1 - v_t1_t1.detach()
     # TODO: weighting?
-    loss = torch.abs(diff).mean()
+    if loss_type == "l1":
+        loss = torch.abs(diff).mean()
+    elif loss_type == "l2":
+        loss = torch.square(diff).mean()
+    else:
+        raise ValueError(f"Invalid loss type: {loss_type}")
 
     return loss

@@ -10,7 +10,7 @@ class DualTimeEmbedder(torch.nn.Module):
 
     def forward(self, timestep, guidance, pooled_projections):
         # Check if timestep is a tuple of two inputs
-        if timestep.shape[-1] == 2:
+        if timestep.shape[-1] == 2 and len(timestep.shape) >= 2:
             t1, t2 = timestep.unbind(dim=-1)
             # Embed both timesteps
             emb1 = self.original_embedder(t1, guidance, pooled_projections)

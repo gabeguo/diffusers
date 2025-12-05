@@ -15,7 +15,7 @@
 export MODEL_NAME="black-forest-labs/FLUX.1-dev"
 export INSTANCE_DIR="does_not_exist"
 export OUTPUT_DIR="/n/netscratch/albergo_lab/Everyone/gabeguo/projects/flux-lora/results/lsd/12-05-25"
-export HF_HOME="/pscratch/sd/g/gabeguo/cache/huggingface"
+#export HF_HOME=""
 
 accelerate launch train_dreambooth_lora_flux.py \
   --pretrained_model_name_or_path=$MODEL_NAME \

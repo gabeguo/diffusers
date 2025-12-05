@@ -720,6 +720,19 @@ def parse_args(input_args=None):
             " 1.10.and an Nvidia Ampere GPU.  Default to  fp16 if a GPU is available else fp32."
         ),
     )
+    parser.add_argument(
+        "--dt",
+        type=float,
+        default=5e-3,
+        help="Time step for the loss calculation.",
+    )
+    parser.add_argument(
+        "--loss_type",
+        type=str,
+        default="l1",
+        choices=["l1", "l2"],
+        help="Loss type for the loss calculation.",
+    )
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--enable_npu_flash_attention", action="store_true", help="Enabla Flash Attention for NPU")
 
@@ -1973,6 +1986,8 @@ def main(args):
                     prompt_embeds=prompt_embeds, 
                     text_ids=text_ids, 
                     latent_image_ids=latent_image_ids, 
+                    dt=args.dt,
+                    loss_type=args.loss_type,
                 )
 
                 """
